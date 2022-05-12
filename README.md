@@ -1,2 +1,2 @@
 # incentives
-Measures node usage per pod and triggers incentives based on smartcontracts or CRD
+Measures node usage and triggers incentives via smartcontract Oracle
