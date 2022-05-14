@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: creometrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: creometrics
+  template:
+    metadata:
+      labels:
+        app: creometrics
+    spec:
+      serviceAccountName: creometrics
+      containers:
+      - name: creometrics-container
+        image: creometrics:0.1
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        ports:
+        - containerPort: 8080
+
+      
+      
