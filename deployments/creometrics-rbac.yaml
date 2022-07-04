@@ -1,18 +1,30 @@
-# apiVersion: v1
-# kind: ServiceAccount
-# metadata:
-#   name: creometrics
-#   namespace: kube-system
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: creometrics
+  namespace: default
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-node-acess-role
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "watch", "list"]
+---   
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: creometrics
 roleRef:
+  # apiGroup: rbac.authorization.k8s.io
+  # kind: ClusterRole
+  # name: admin
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: admin
+  name: cluster-node-acess-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: creometrics
   namespace: default

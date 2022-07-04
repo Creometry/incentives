@@ -6,7 +6,10 @@ if this is ran outside a Kubernetes pod , you need to set the KUBERNETES_SERVICE
 you can this variables by running :
     kubectl describe svc kubernetes
 
+to run locally set env variable APP_ENV to development
+
 TODO:
+
     Short Term:
     * collect metrics across all namespaces
     * collect metrics of all pods and nodes
