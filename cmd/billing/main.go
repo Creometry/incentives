@@ -5,18 +5,31 @@ package main
 // Racher_API = "link-to-rancher-api"
 
 import (
+	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	_ "github.com/lib/pq"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/k0kubun/pp"
 	"github.com/kubecost/opencost/pkg/kubecost"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 type AccountType string
@@ -29,39 +42,49 @@ const (
 )
 
 type Project struct {
-	projectId         uuid.UUID
-	clusterId         uuid.UUID
-	creationTimeStamp time.Time
-	State             string
+	projectId          uuid.UUID `gorm:"primaryKey"`
+	clusterId          uuid.UUID
+	creationTimeStamp  time.Time
+	State              string
+	BillingAccountUUID string `gorm:"foreignKey:BillingAccountRefer"`
 }
 
 type AdminDetails struct {
-	email        string
-	phone_number string
-	name         string
+	gorm.Model
+	UUID               uuid.UUID `json:"uuid"`
+	Email              string    `json:"email"`
+	Phone_number       string    `json:"phone_number"`
+	Name               string    `json:"name"`
+	BillingAccountUUID string    `gorm:"many2many:AdminDetails;"`
+	Billing_account_id string    `gorm:"foreignKey:BillingAccountRefer"`
 }
 
 type Company struct {
-	isCompany bool
-	TaxId     string
-	name      string
+	IsCompany bool   `json:"isCompany"`
+	TaxId     string `json:"TaxId" gorm:"primaryKey"`
+	Name      string `json:"name"`
 }
 
 type BillFile struct {
-	pdfLink string
-	amount  float64
+	BillingDate        time.Time `json:"BillingDate" gorm:"primaryKey"`
+	PdfLink            string    `json:"pdfLink"`
+	Amount             float64   `json:"amount"`
+	BillingAccountUUID string    `gorm:"foreignKey:BillingAccountRefer"`
 }
 
 type BillingAccount struct {
-	UUID             uuid.UUID
-	billingAdmins    map[string]AdminDetails
-	billingStartDate time.Time
-	accountType      AccountType
-	balance          float64
-	history          map[time.Time]BillFile
-	isActive         bool
-	company          Company
-	projects         []Project
+	gorm.Model
+	UUID uuid.UUID `json:"uuid" gorm:"primaryKey"`
+	// BillingAdmins    []AdminDetails `json:"billingAdmins" gorm:"embedded"`
+	BillingAdmins    []AdminDetails `json:"billingAdmins" gorm:"many2many:AdminDetails;"`
+	BillingStartDate time.Time      `json:"billingStartDate"`
+	AccountType      AccountType    `json:"accountType"`
+	Balance          float64        `json:"balance"`
+	History          []BillFile     `json:"history"`
+	IsActive         bool           `json:"isActive"`
+	// Company          Company        `json:"company" gorm:"references:TaxId"`
+	Company  Company   `json:"company" gorm:"-"`
+	Projects []Project `json:"projects"`
 }
 
 type resourcePricing struct {
@@ -70,10 +93,13 @@ type resourcePricing struct {
 }
 
 type Metrics struct {
-	CpuMinutes      int64
-	CpuAverageUsage float64
-	RamMinutes      int64
-	RamAverageUsage float64
+	CPUCoreHours         float64
+	CpuAverageUsage      float64
+	RamMinutes           float64
+	RamAverageUsage      float64
+	networkTransferBytes float64
+	networkReceiveBytes  float64
+	pvByteHours          float64
 }
 
 type allocationResponse struct {
@@ -163,86 +189,6 @@ type RancherprojectRoleTemplateBindings struct {
 // 	}
 // }
 
-type namespaceData struct {
-	Type  string `json:"type"`
-	Links struct {
-		Self string `json:"self"`
-	} `json:"links"`
-	CreateTypes struct {
-		Namespace string `json:"namespace"`
-	} `json:"createTypes"`
-	Actions struct {
-	} `json:"actions"`
-	ResourceType string `json:"resourceType"`
-	Revision     string `json:"revision"`
-	Data         []struct {
-		ID    string `json:"id"`
-		Type  string `json:"type"`
-		Links struct {
-			Remove string `json:"remove"`
-			Self   string `json:"self"`
-			Update string `json:"update"`
-			View   string `json:"view"`
-		} `json:"links"`
-		APIVersion string `json:"apiVersion"`
-		Kind       string `json:"kind"`
-		Metadata   struct {
-			Annotations struct {
-				CattleIoStatus                       string `json:"cattle.io/status"`
-				FieldCattleIoProjectID               string `json:"field.cattle.io/projectId"`
-				LifecycleCattleIoCreateNamespaceAuth string `json:"lifecycle.cattle.io/create.namespace-auth"`
-				ManagementCattleIoNoDefaultSaToken   string `json:"management.cattle.io/no-default-sa-token"`
-				ManagementCattleIoSystemNamespace    string `json:"management.cattle.io/system-namespace"`
-			} `json:"annotations"`
-			CreationTimestamp string   `json:"creationTimestamp"`
-			Fields            []string `json:"fields"`
-			Finalizers        []string `json:"finalizers"`
-			Labels            struct {
-				KubernetesIoMetadataName string `json:"kubernetes.io/metadata.name"`
-			} `json:"labels"`
-			ManagedFields []struct {
-				APIVersion string `json:"apiVersion"`
-				FieldsType string `json:"fieldsType"`
-				FieldsV1   struct {
-					FMetadata struct {
-						FAnnotations struct {
-							NAMING_FAILED struct {
-							} `json:"."`
-							FManagementCattleIoSystemNamespace struct {
-							} `json:"f:management.cattle.io/system-namespace"`
-						} `json:"f:annotations"`
-						FLabels struct {
-							NAMING_FAILED struct {
-							} `json:"."`
-							FKubernetesIoMetadataName struct {
-							} `json:"f:kubernetes.io/metadata.name"`
-						} `json:"f:labels"`
-					} `json:"f:metadata"`
-				} `json:"fieldsV1"`
-				Manager   string `json:"manager"`
-				Operation string `json:"operation"`
-				Time      string `json:"time"`
-			} `json:"managedFields"`
-			Name            string      `json:"name"`
-			Relationships   interface{} `json:"relationships"`
-			ResourceVersion string      `json:"resourceVersion"`
-			State           struct {
-				Error         bool   `json:"error"`
-				Message       string `json:"message"`
-				Name          string `json:"name"`
-				Transitioning bool   `json:"transitioning"`
-			} `json:"state"`
-			UID string `json:"uid"`
-		} `json:"metadata"`
-		Spec struct {
-			Finalizers []string `json:"finalizers"`
-		} `json:"spec"`
-		Status struct {
-			Phase string `json:"phase"`
-		} `json:"status"`
-	} `json:"data"`
-}
-
 func LoadDotEnvVariables() int {
 
 	// load .env file
@@ -266,7 +212,7 @@ func getresourcePricing() resourcePricing {
 }
 
 // func getNamespaceMetrics(namespaces []string) (allocationResponse, error) {
-func getNamespaceMetrics() (allocationResponse, error) {
+func getNamespaceMetrics(namespaceId string) (allocationResponse, error) {
 	var kubecostUrl string
 	// ** kubecost allocation params: **
 	// ref : https://github.com/kubecost/docs/blob/main/allocation.md
@@ -282,6 +228,10 @@ func getNamespaceMetrics() (allocationResponse, error) {
 	accumulte := "true"
 	//field by wich to aggrgate results
 	aggregate := "namespace"
+	// select namespace by which to filter results
+	filterNamespaces := namespaceId
+
+	// _ = filterNamespaces
 
 	// kubecostUrl := "kubecost-cost-analyzer"
 	if os.Getenv("APP_ENV") == "development" {
@@ -292,7 +242,7 @@ func getNamespaceMetrics() (allocationResponse, error) {
 
 	// kubecost metrics api
 	// url := "http://" + kubecostUrl + ":9090/model/allocation?window=" + window + "&accumulate=" + accumulte + "&filterNamespaces=" + Namespaces + "&aggregate=" + aggregate
-	url := "http://" + kubecostUrl + ":9090/model/allocation?window=" + window + "&accumulate=" + accumulte + "&aggregate=" + aggregate
+	url := "http://" + kubecostUrl + ":9090/model/allocation?window=" + window + "&accumulate=" + accumulte + "&aggregate=" + aggregate + "&filterNamespaces=" + filterNamespaces
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -301,7 +251,6 @@ func getNamespaceMetrics() (allocationResponse, error) {
 	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
-	// fmt.Println(string(body))
 
 	kubecostResponse := allocationResponse{}
 	jsonErr := json.Unmarshal(body, &kubecostResponse)
@@ -309,7 +258,7 @@ func getNamespaceMetrics() (allocationResponse, error) {
 		log.Fatal(jsonErr)
 	}
 
-	// fmt.Println(kubecostResponse)
+	// pp.Println(kubecostResponse)
 	return kubecostResponse, nil
 
 }
@@ -377,15 +326,17 @@ func getRancherUsers() (RancherUsers, error) {
 
 func getRancherProjects() (RancherProjects, error) {
 	//TODO: create a loop to loop over pagination
+
 	Rancher_API, RancherBearerToken := getRancherAPIEnvVar()
 
-	url := Rancher_API + "/projects"
+	url := Rancher_API + "/v3/projects"
 
 	var bearer = "Bearer " + RancherBearerToken
 
 	req, err := http.NewRequest("GET", url, nil)
 	req.Header.Add("Authorization", bearer)
 
+	// client := &http.Client{Transport: tr}
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -405,7 +356,7 @@ func getRancherProjects() (RancherProjects, error) {
 		log.Fatal(jsonErr)
 	}
 
-	fmt.Println(RancherResponse)
+	// pp.Println("getting rancher projects from /v3/projects", RancherResponse)
 
 	return RancherResponse, nil
 }
@@ -568,63 +519,73 @@ func matchUsersToProjects(userslist RancherUsers) (map[string][]string, error) {
 	return usersProjects, nil
 }
 
-func bindnamespacestoprojects() (int, error) {
-	var projectsNamespaces map[string][]string
-	projectsNamespaces = make(map[string][]string)
+// func bindnamespacestoprojects() (int, error) {
+// 	var projectsNamespaces map[string][]string
+// 	projectsNamespaces = make(map[string][]string)
 
-	_ = projectsNamespaces
+// 	_ = projectsNamespaces
 
-	Rancher_API, RancherBearerToken := getRancherAPIEnvVar()
+// 	Rancher_API, RancherBearerToken := getRancherAPIEnvVar()
 
-	var bearer = "Bearer " + RancherBearerToken
+// 	var bearer = "Bearer " + RancherBearerToken
 
-	url := Rancher_API + "/v1/namespaces"
+// 	url := Rancher_API + "/v1/namespaces"
 
-	req, err := http.NewRequest("GET", url, nil)
-	req.Header.Add("Authorization", bearer)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Println("No response from Rancher!", err)
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Println("error reading reponse from Rancher API when fetching namespaces from Rancher's API ", err)
-	}
-	RancherResponse := namespaceData{}
-	jsonErr := json.Unmarshal(body, &RancherResponse)
-	if jsonErr != nil {
-		log.Fatal(jsonErr)
-	}
+// 	req, err := http.NewRequest("GET", url, nil)
+// 	req.Header.Add("Authorization", bearer)
+// 	client := &http.Client{}
+// 	resp, err := client.Do(req)
+// 	if err != nil {
+// 		log.Println("No response from Rancher!", err)
+// 	}
+// 	defer resp.Body.Close()
+// 	body, err := ioutil.ReadAll(resp.Body)
+// 	if err != nil {
+// 		log.Println("error reading reponse from Rancher API when fetching namespaces from Rancher's API ", err)
+// 	}
+// 	RancherResponse := namespaceData{}
+// 	jsonErr := json.Unmarshal(body, &RancherResponse)
+// 	if jsonErr != nil {
+// 		log.Fatal(jsonErr)
+// 	}
 
-	pp.Print("namespaceData", RancherResponse)
+// 	pp.Print("namespaceData", RancherResponse)
 
-	// for _, namespaceData := range RancherResponse.Data {
-	// 	fmt.Println("namespaceData.ID", namespaceData.ID)
-	// 	fmt.Println("projectId", namespaceData.Metadata.Annotations.ProjectId)
-	// 	projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = []string{}
-	// 	if (projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId]) == nil {
-	// 		var namespacelist []string
-	// 		namespacelist = append(namespacelist, namespaceData.ID)
-	// 		projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = namespacelist
+// 	// for _, namespaceData := range RancherResponse.Data {
+// 	// 	fmt.Println("namespaceData.ID", namespaceData.ID)
+// 	// 	fmt.Println("projectId", namespaceData.Metadata.Annotations.ProjectId)
+// 	// 	projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = []string{}
+// 	// 	if (projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId]) == nil {
+// 	// 		var namespacelist []string
+// 	// 		namespacelist = append(namespacelist, namespaceData.ID)
+// 	// 		projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = namespacelist
 
-	// 	} else {
-	// 		projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = append(projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId], namespaceData.ID)
-	// 	}
-	// }
+// 	// 	} else {
+// 	// 		projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId] = append(projectsNamespaces[namespaceData.Metadata.Annotations.ProjectId], namespaceData.ID)
+// 	// 	}
+// 	// }
 
-	// fmt.Println("projectsNamespaces", projectsNamespaces)
-	return 0, nil
-}
+// 	// fmt.Println("projectsNamespaces", projectsNamespaces)
+// 	return 0, nil
+// }
 
 func generatebill() (BillingAccount, error) {
 	// TODO: get this objects to be used in writing tests
-	adminDetailsexample := make(map[string]AdminDetails)
-	adminDetailsexample["admin1"] = AdminDetails{email: "exmaleadmin@email.com", phone_number: "21452012", name: "mohsen"}
+	adminDetailsexample := []AdminDetails{}
+	adminDetailsexample = append(adminDetailsexample, AdminDetails{Email: "exmaleadmin@email.com", Phone_number: "21452012", Name: "mohsen"})
+	// adminDetailsexample["admin1"] = AdminDetails{email: "exmaleadmin@email.com", phone_number: "21452012", name: "mohsen"}
 
-	historyExample := make(map[time.Time]BillFile)
-	historyExample[time.Date(2022, time.June, 10, 9, 40, 0, 0, time.UTC)] = BillFile{pdfLink: "https://linktopdf.com/12540336", amount: 25}
+	// historyExample := make(map[time.Time]BillFile)
+	// historyExample[time.Date(2022, time.June, 10, 9, 40, 0, 0, time.UTC)] = BillFile{pdfLink: "https://linktopdf.com/12540336", amount: 25}
+	historyExample := make([]BillFile, 1)
+
+	billFileExample := BillFile{
+		BillingDate: time.Date(2022, time.June, 10, 9, 40, 0, 0, time.UTC),
+		PdfLink:     "https://linktopdf.com/12540336",
+		Amount:      25,
+	}
+
+	historyExample = append(historyExample, billFileExample)
 
 	projectexample := Project{
 		projectId:         uuid.New(),
@@ -637,28 +598,193 @@ func generatebill() (BillingAccount, error) {
 	bill := BillingAccount{
 		UUID: uuid.New(),
 		// get list of billing admins from database or rancher
-		billingAdmins: adminDetailsexample,
+		BillingAdmins: adminDetailsexample,
 		// get the first date of any projects in the bill
-		billingStartDate: time.Now(),
+		BillingStartDate: time.Now(),
 		// company assigning project if exists
-		company:     Company{isCompany: false, TaxId: "", name: ""},
-		accountType: "Starter",
+		Company:     Company{IsCompany: false, TaxId: "", Name: ""},
+		AccountType: "Starter",
 		// get balence from database
-		balance: 25.410,
+		Balance: 25.410,
 		// lsit of previous bills
-		history: historyExample,
+		History: historyExample,
 		// is account suspended or not
-		isActive: true,
+		IsActive: true,
 		// TODO: discuss if this value is better turned to map of clusters and projects whith clusters representing regions
-		projects: projectsexample,
+		Projects: projectsexample,
 	}
 
 	fmt.Println("bill", bill)
 	return bill, nil
 }
 
+func getK8SClient() *kubernetes.Clientset {
+	// TODO: implement in cluster client
+	var kubeconfig *string
+	if home := homedir.HomeDir(); home != "" {
+		kubeconfig = flag.String("kubeconfig", filepath.Join(home, ".kube", "config"), "(optional) absolute path to the kubeconfig file")
+	} else {
+		kubeconfig = flag.String("kubeconfig", "", "absolute path to the kubeconfig file")
+	}
+
+	// kubeconfig = flag.String("kubeconfig", "", "./config/kubeconfig")
+	// flag.Parse()
+
+	// use the current context in kubeconfig
+	config, err := clientcmd.BuildConfigFromFlags("", *kubeconfig)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// create the clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	return clientset
+}
+
+func getnamespacesOfProjects(clientset *kubernetes.Clientset, ProjectId string) []string {
+
+	var projectsNamespaces []string
+
+	pp.Println("projectId", ProjectId)
+	listOptions := metav1.ListOptions{
+		// FieldSelector: "status.successful=1",
+		LabelSelector: "field.cattle.io/projectId=" + ProjectId,
+		// LabelSelector: "kubernetes.io/metadata.name=mehernamespace2",
+		// LabelSelector: "field.cattle.io/projectId=p-9d4vx",
+	}
+
+	// pp.Println("listOptions", listOptions)
+
+	namespaces, err := clientset.CoreV1().Namespaces().List(context.TODO(), listOptions)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	// pp.Println("namespaces returned from kubernetes api", namespaces)
+	for _, namespaceData := range namespaces.Items {
+		projectsNamespaces = append(projectsNamespaces, namespaceData.ObjectMeta.Name)
+	}
+
+	pp.Println("projectsNamespaces", projectsNamespaces)
+
+	return projectsNamespaces
+
+}
+
+func separateprojectIdfromClusterId(projectId string) string {
+	if idx := strings.Index(projectId, ":"); idx != -1 {
+		return projectId[idx+1:]
+	}
+	return projectId
+}
+
 // this functions updates the balence for the accounts on the pay-per-user plan
-func updateBalence() {}
+// func updateBalence() {}
+
+type createBillingAccount struct {
+	BillingAdmins []AdminDetails `json:"billingAdmins"`
+	AccountType   AccountType    `json:"accountType"`
+	Company       Company        `json:"company"`
+	Projects      []Project      `json:"projects"`
+}
+
+func (h handler) CreateBillingAccount(c *gin.Context) {
+	// log.Println("creating billing account by ", billingAccount.billingAdmins[0])
+
+	// Validate input
+
+	h.DB.Migrator().CreateTable(&BillingAccount{})
+
+	var input createBillingAccount
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	pp.Println("input", input)
+	accountDetails := BillingAccount{
+		UUID:             uuid.New(),
+		BillingAdmins:    input.BillingAdmins,
+		BillingStartDate: time.Now(),
+		AccountType:      input.AccountType,
+		Balance:          0.0,
+		History:          []BillFile{},
+		IsActive:         true,
+		Company:          input.Company,
+		Projects:         input.Projects,
+	}
+
+	if result := h.DB.Table("billing_accounts").Create(&accountDetails); result.Error != nil {
+		c.AbortWithError(http.StatusNotFound, result.Error)
+		return
+	}
+
+	pp.Println("accountDetails", accountDetails)
+	c.JSON(http.StatusCreated, accountDetails)
+
+}
+
+// func getBillingAccount() {}
+
+type UserRepo struct {
+	Db *gorm.DB
+}
+
+// func New(sqldb *gorm.DB) *UserRepo {
+// 	db := sqldb.InitDb()
+// 	return &UserRepo{Db: db}
+// }
+
+type handler struct {
+	DB *gorm.DB
+}
+
+// func exposeHttpServer(db *sql.DB) {
+func exposeHttpServer(db *gorm.DB) {
+
+	h := &handler{
+		DB: db,
+	}
+	// 	BillingAdmins
+	// History
+	// Projects
+
+	db.AutoMigrate(&BillingAccount{}, &AdminDetails{}, &BillFile{}, &Project{}, &Company{})
+
+	// db.Migrator().CreateTable(&BillingAccount{})
+
+	// db.Model(&BillingAccount).Related(&History)
+
+	router := gin.Default()
+	router.POST("/CreateBillingAccount", h.CreateBillingAccount)
+	// router.GET("/getBillingAccount/:id", getBillingAccount)
+	router.Run("localhost:8080")
+}
+
+func createDatabaseConnection() (*gorm.DB, error) {
+	//TODO: take database info as env variables
+	// connStr := "postgresql://bobsql:mypasswordbob@127.0.0.1/creometry-billing"
+	// connStr := "postgresql://bobsql:mypasswordbob@127.0.0.1/creometry-billing?sslmode=disable"
+	// Connect to database
+	// db, err := sql.Open("postgres", connStr)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// 	return nil, err
+	// }
+
+	dsn := "host=localhost user=bobsql password=mypasswordbob dbname=creometry-billing port=5432 TimeZone=UTC+1"
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		log.Fatal(err)
+		return nil, err
+	}
+
+	return db, nil
+}
 
 // link namesapces to projects and then projects to users
 
@@ -668,20 +794,61 @@ func updateBalence() {}
 func main() {
 	LoadDotEnvVariables()
 
-	// RancherUsersDetails, err := getRancherUsers()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// matchUsersToProjects(RancherUsersDetails)
+	db, err := createDatabaseConnection()
+	if err != nil {
+		log.Fatal(err)
+	}
+	exposeHttpServer(db)
 
-	bindnamespacestoprojects()
+	// var namespaces map[string][]string
+	// // var namespacesMetrics map[string][]string
+	// namespaces = make(map[string][]string)
+	// // RancherUsersDetails, err := getRancherUsers()
+	// // if err != nil {
+	// // 	log.Fatal(err)
+	// // }
+	// // matchUsersToProjects(RancherUsersDetails)
+
+	// // bindnamespacestoprojects()
+	// clientset := getK8SClient()
+
+	// projects, error := getRancherProjects()
+	// if error != nil {
+	// 	log.Fatal(error)
+	// }
+	// for _, project := range projects.Data {
+	// 	// getnamespacesOfProjects(clientset, project.ID)
+	// 	projectId := separateprojectIdfromClusterId(project.ID)
+	// 	namespaces[project.ID] = getnamespacesOfProjects(clientset, projectId)
+
+	// 	for _, namespace := range namespaces[project.ID] {
+	// 		metrics, err := getNamespaceMetrics(namespace)
+	// 		if err != nil {
+	// 			log.Printf("error while fetching metrics for namespace ", namespace, err)
+	// 		}
+	// 		// var testvariable kubecost.Allocation
+	// 		// pp.Println("metrics", metrics)
+	// 		pp.Println("metrics.Data[0]['__idle__']", metrics.Data[0]["__idle__"])
+	// 		namespaceMetrics := Metrics{
+	// 			CPUCoreHours:         metrics.Data[0]["__idle__"].CPUCoreHours,
+	// 			CpuAverageUsage:      metrics.Data[0]["__idle__"].CPUCoreUsageAverage,
+	// 			RamMinutes:           metrics.Data[0]["__idle__"].RAMByteHours,
+	// 			RamAverageUsage:      metrics.Data[0]["__idle__"].RAMBytesUsageAverage,
+	// 			networkTransferBytes: metrics.Data[0]["__idle__"].NetworkTransferBytes,
+	// 			networkReceiveBytes:  metrics.Data[0]["__idle__"].NetworkTransferBytes,
+	// 			//TODO: calculate PV total
+	// 			// pvByteHours: metrics.Data[0]["__idle__"].PVs,
+	// 		}
+	// 		pp.Println("namespaceMetrics of ", namespace, namespaceMetrics)
+	// 		// namespacesMetrics[namespace] =
+	// 	}
+	// }
 
 	// generatebill()
 	// clusterIds := getRancherClustersIds()
 
 	// getRancherNamespaces(clusterIds)
 
-	// // getRancherProjects()
 	// // var namespaces = []string{"default"}
 	// namespaceMetrics, err := getNamespaceMetrics()
 	// if err != nil {
