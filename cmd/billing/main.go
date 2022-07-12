@@ -55,8 +55,7 @@ type AdminDetails struct {
 	Email              string    `json:"email"`
 	Phone_number       string    `json:"phone_number"`
 	Name               string    `json:"name"`
-	BillingAccountUUID string    `gorm:"many2many:AdminDetails;"`
-	Billing_account_id string    `gorm:"foreignKey:BillingAccountRefer"`
+	BillingAccountUUID string    `gorm:"foreignKey:BillingAccountRefer"`
 }
 
 type Company struct {
@@ -75,13 +74,14 @@ type BillFile struct {
 type BillingAccount struct {
 	gorm.Model
 	UUID uuid.UUID `json:"uuid" gorm:"primaryKey"`
-	// BillingAdmins    []AdminDetails `json:"billingAdmins" gorm:"embedded"`
-	BillingAdmins    []AdminDetails `json:"billingAdmins" gorm:"many2many:AdminDetails;"`
-	BillingStartDate time.Time      `json:"billingStartDate"`
-	AccountType      AccountType    `json:"accountType"`
-	Balance          float64        `json:"balance"`
-	History          []BillFile     `json:"history"`
-	IsActive         bool           `json:"isActive"`
+	// BillingAdmins []AdminDetails `json:"billingAdmins" gorm:"embedded"`
+	BillingAdmins []AdminDetails `json:"billingAdmins"`
+	// BillingAdmins    []AdminDetails `json:"billingAdmins" gorm:"many2many:AdminDetails;"`
+	BillingStartDate time.Time   `json:"billingStartDate"`
+	AccountType      AccountType `json:"accountType"`
+	Balance          float64     `json:"balance"`
+	History          []BillFile  `json:"history"`
+	IsActive         bool        `json:"isActive"`
 	// Company          Company        `json:"company" gorm:"references:TaxId"`
 	Company  Company   `json:"company" gorm:"-"`
 	Projects []Project `json:"projects"`
