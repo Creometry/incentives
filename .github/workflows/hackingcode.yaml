@@ -22,7 +22,7 @@ jobs:
         with:
           image: creometry/hackingcode
           tags: v0.0.1
-          dockerfile: incentives/Dockerfile
+          dockerfile: ./Dockerfile
           registry: docker.io
           directory: incentives
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
