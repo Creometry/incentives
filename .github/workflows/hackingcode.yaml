@@ -24,6 +24,5 @@ jobs:
           tags: v0.0.1
           dockerfile: ./Dockerfile
           registry: docker.io
-          directory: incentives
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}  
