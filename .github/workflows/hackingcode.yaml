@@ -3,7 +3,7 @@ name: hackingcode-ci
 on:
   push:
     branches:
-      - 'stable'
+      - 'main'
     
            
 jobs: 
