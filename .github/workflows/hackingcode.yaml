@@ -1,0 +1,31 @@
+name: hackingcode-ci
+
+on:
+  push:
+    branches:
+      - 'stable'
+    
+           
+jobs: 
+
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.18
+
+      - uses: mr-smithers-excellent/docker-build-push@v5
+        name: Build & push Docker image
+        with:
+          image: creometry/hackingcode
+          tags: v0.0.1
+          dockerfile: hackingcode/Dockerfile
+          registry: docker.io
+          directory: hackingcode
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}  
